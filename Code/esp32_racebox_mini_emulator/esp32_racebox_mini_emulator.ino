@@ -422,9 +422,11 @@ void loop() {
       Serial.printf("BLE Packet Rate: %.2f Hz | GNSS Update Rate: %.2f Hz\n", bleRate, gnssRate);
       
       // Output GPS coordinates
-      double latitude = myGNSS.packetUBXNAVPVT->data.lat / 10000000.0;
-      double longitude = myGNSS.packetUBXNAVPVT->data.lon / 10000000.0;
-      Serial.printf("GPS Coordinates: Lat: %.7f, Lon: %.7f\n", latitude, longitude);
+      if (myGNSS.packetUBXNAVPVT != NULL) {
+        double latitude = myGNSS.packetUBXNAVPVT->data.lat / 10000000.0;
+        double longitude = myGNSS.packetUBXNAVPVT->data.lon / 10000000.0;
+        Serial.printf("GPS Coordinates: Lat: %.7f, Lon: %.7f\n", latitude, longitude);
+      }
       
       gpsUpdateCount = 0;
       gnssUpdateCount = 0;
