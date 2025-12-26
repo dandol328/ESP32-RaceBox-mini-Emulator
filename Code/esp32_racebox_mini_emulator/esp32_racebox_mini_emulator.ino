@@ -420,6 +420,12 @@ void loop() {
       float bleRate = gpsUpdateCount / (GPS_RATE_REPORT_INTERVAL_MS / 1000.0);
       float gnssRate = gnssUpdateCount / (GPS_RATE_REPORT_INTERVAL_MS / 1000.0);
       Serial.printf("BLE Packet Rate: %.2f Hz | GNSS Update Rate: %.2f Hz\n", bleRate, gnssRate);
+      
+      // Output GPS coordinates
+      double latitude = myGNSS.packetUBXNAVPVT->data.lat / 10000000.0;
+      double longitude = myGNSS.packetUBXNAVPVT->data.lon / 10000000.0;
+      Serial.printf("GPS Coordinates: Lat: %.7f, Lon: %.7f\n", latitude, longitude);
+      
       gpsUpdateCount = 0;
       gnssUpdateCount = 0;
       lastGpsRateCheckTime = now;
