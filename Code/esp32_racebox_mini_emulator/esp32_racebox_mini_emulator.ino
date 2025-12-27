@@ -7,6 +7,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <SimpleKalmanFilter.h>
+#include <math.h> // for fabs()
 
 // --- GPS Configuration ---
 #define GPS_RX_PIN 16
@@ -73,6 +74,16 @@ bool enabledGPS = false;
 bool enabledGalileo = false;
 bool enabledGLONASS = false;
 bool enabledBeiDou = false;
+
+// --- LED (GPS status) ---
+const int LED_PIN = 2; // onboard LED for many ESP32 boards; change if different
+const unsigned long QUICK_BLINK_MS = 200; // fast blink period (toggle interval)
+const unsigned long SLOW_BLINK_MS = 1000; // slow blink period (toggle interval)
+const double COORD_ZERO_THRESHOLD = 0.0001; // degrees; lat/lon considered "zero" if within this
+unsigned long lastLedToggleTime = 0;
+bool ledState = false;
+double latestLat = 0.0;
+double latestLon = 0.0;
 
 // --- BLE Callbacks ---
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -293,11 +304,46 @@ void setup() {
   BLEDevice::startAdvertising();
   Serial.println("📡 BLE advertising started.");
 
+  // LED init
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  lastLedToggleTime = millis();
+
   lastGpsRateCheckTime = millis();
 }
 
 void loop() {
   myGNSS.checkUblox(); // Required to keep GNSS data flowing
+
+  // Determine desired blink interval based on latest coordinates.
+  // If there's no PVT packet yet, treat as acquiring (fast blink).
+  unsigned long desiredBlinkInterval = QUICK_BLINK_MS;
+  if (myGNSS.packetUBXNAVPVT != NULL) {
+    // Update latest known coordinates (degrees)
+    latestLat = myGNSS.packetUBXNAVPVT->data.lat / 10000000.0;
+    latestLon = myGNSS.packetUBXNAVPVT->data.lon / 10000000.0;
+
+    // If lat/lon are effectively zero (within threshold) we consider GPS acquiring.
+    if ((fabs(latestLat) > COORD_ZERO_THRESHOLD) || (fabs(latestLon) > COORD_ZERO_THRESHOLD)) {
+      // Good coordinates available -> slow blink
+      desiredBlinkInterval = SLOW_BLINK_MS;
+    } else {
+      // Coordinates still near zero -> acquiring -> quick blink
+      desiredBlinkInterval = QUICK_BLINK_MS;
+    }
+  } else {
+    // No PVT packet yet -> acquiring
+    desiredBlinkInterval = QUICK_BLINK_MS;
+  }
+
+  // Non-blocking LED toggle logic
+  unsigned long nowLed = millis();
+  if ((nowLed - lastLedToggleTime) >= desiredBlinkInterval) {
+    ledState = !ledState;
+    digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+    lastLedToggleTime = nowLed;
+  }
+
   if (myGNSS.getPVT()) {
     static uint32_t lastITOW = 0;
     uint32_t currentITOW = myGNSS.packetUBXNAVPVT->data.iTOW;
@@ -356,14 +402,24 @@ void loop() {
         // Offset 21: Fix Status Flags (RaceBox Protocol)
         uint8_t fixStatusFlagsRacebox = 0;
 
+        // Bit 0: valid fix
         if (myGNSS.packetUBXNAVPVT->data.fixType == 3) {
-            fixStatusFlagsRacebox |= (1 << 0); // Bit 0: valid fix
+          fixStatusFlagsRacebox |= (1 << 0);
         }
 
-        // Add this line to set Bit 5 for valid heading using getHeadVehValid()
-        if (myGNSS.getHeadVehValid()) { // Use the confirmed function to check for valid heading
-            fixStatusFlagsRacebox |= (1 << 5); // Bit 5: valid heading (as per RaceBox Protocol)
+        // Bit 1: differential corrections applied
+        if (myGNSS.packetUBXNAVPVT->data.flags.bits.diffSoln) {
+          fixStatusFlagsRacebox |= (1 << 1);
         }
+
+        // Bits 2–4: power state (set to ON = 1)
+        fixStatusFlagsRacebox |= (1 << 2);
+
+        // Bit 5: valid heading (only if moving)
+        if (myGNSS.getHeadVehValid() && myGNSS.packetUBXNAVPVT->data.gSpeed > 500) {  // >0.5 m/s
+          fixStatusFlagsRacebox |= (1 << 5);
+        }
+
         writeLittleEndian(payload, 21, fixStatusFlagsRacebox);
 
         // Offset 22: Date/Time Flags (RaceBox Protocol) 
@@ -398,6 +454,11 @@ void loop() {
         }
         writeLittleEndian(payload, 66, latLonFlags);
 
+        // Offset 67: Battery Status (fake 100%, not charging)
+        uint8_t batteryStatus = 0x64; // 100%, MSB=0 (not charging)
+        writeLittleEndian(payload, 67, batteryStatus);
+
+
         writeLittleEndian(payload, 68, gX);
         writeLittleEndian(payload, 70, gY);
         writeLittleEndian(payload, 72, gZ);
@@ -415,15 +476,22 @@ void loop() {
         packet[4] = 80;   // Payload size 
         packet[5] = 0;
         memcpy(packet + 6, payload, 80);
-        uint8_t ckA, ckB;
         // Use the correct Class (0xFF) and ID (0x01) for checksum calculation as per RaceBox protocol 
-        calculateChecksum(payload, 80, 0xFF, 0x01, &ckA, &ckB);
+        
+        uint8_t ckA = 0, ckB = 0;
+        // Checksum over CLASS, ID, LENGTH, PAYLOAD
+        for (int i = 2; i < 86; i++) { // packet[2] to packet[85]
+          ckA += packet[i];
+          ckB += ckA;
+        }
+
+
         packet[86] = ckA;
         packet[87] = ckB;
 
         pCharacteristicTx->setValue(packet, 88);
         pCharacteristicTx->notify();
-        delay(20);
+        // delay(20);
       }
 
       // Rate-limited serial telemetry (every SERIAL_PRINT_INTERVAL_MS)
