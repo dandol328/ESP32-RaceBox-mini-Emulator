@@ -394,6 +394,7 @@ void loop() {
         writeLittleEndian(payload, 78, rZ);
 
 
+
         // Wrap in UBX (standard RaceBox header and checksum)
         packet[0] = 0xB5;
         packet[1] = 0x62;
