@@ -25,9 +25,9 @@ HardwareSerial GPS_Serial(2);
 
 #define ENABLE_GNSS_GPS
 #define ENABLE_GNSS_GALILEO
-// #define ENABLE_GNSS_GLONASS
+#define ENABLE_GNSS_GLONASS
 // #define ENABLE_GNSS_BEIDOU
-// #define ENABLE_GNSS_SBAS
+#define ENABLE_GNSS_SBAS
 // #define ENABLE_GNSS_QZSS
 
 const String deviceName = "RaceBox Mini 0123456789";
@@ -64,6 +64,15 @@ unsigned int gpsUpdateCount = 0;
 const unsigned long GPS_RATE_REPORT_INTERVAL_MS = 5000;
 unsigned int gnssUpdateCount = 0;
 
+// --- Serial telemetry rate-limiting globals ---
+static unsigned long lastSerialPrintTime = 0;
+const unsigned long SERIAL_PRINT_INTERVAL_MS = 5000; // 5000 ms = 5 seconds
+
+// Flags to record which constellations were enabled during setup:
+bool enabledGPS = false;
+bool enabledGalileo = false;
+bool enabledGLONASS = false;
+bool enabledBeiDou = false;
 
 // --- BLE Callbacks ---
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -187,48 +196,60 @@ void setup() {
   #ifdef ENABLE_GNSS_GPS
     if (myGNSS.enableGNSS(true, SFE_UBLOX_GNSS_ID_GPS)) {
       Serial.println("✅ GPS enabled.");
+      enabledGPS = true;
     } else {
       Serial.println("❌ Failed to enable GPS.");
+      enabledGPS = false;
     }
   #else
     myGNSS.enableGNSS(false, SFE_UBLOX_GNSS_ID_GPS);
     Serial.println("🚫 GPS disabled.");
+    enabledGPS = false;
   #endif
 
   // Galileo
   #ifdef ENABLE_GNSS_GALILEO
     if (myGNSS.enableGNSS(true, SFE_UBLOX_GNSS_ID_GALILEO)) {
       Serial.println("✅ Galileo enabled.");
+      enabledGalileo = true;
     } else {
       Serial.println("❌ Failed to enable Galileo.");
+      enabledGalileo = false;
     }
   #else
     myGNSS.enableGNSS(false, SFE_UBLOX_GNSS_ID_GALILEO);
     Serial.println("🚫 Galileo disabled.");
+    enabledGalileo = false;
   #endif
 
   // GLONASS
   #ifdef ENABLE_GNSS_GLONASS
     if (myGNSS.enableGNSS(true, SFE_UBLOX_GNSS_ID_GLONASS)) {
       Serial.println("✅ GLONASS enabled.");
+      enabledGLONASS = true;
     } else {
       Serial.println("❌ Failed to enable GLONASS.");
+      enabledGLONASS = false;
     }
   #else
     myGNSS.enableGNSS(false, SFE_UBLOX_GNSS_ID_GLONASS);
     Serial.println("🚫 GLONASS disabled.");
+    enabledGLONASS = false;
   #endif
 
   // BeiDou
   #ifdef ENABLE_GNSS_BEIDOU
     if (myGNSS.enableGNSS(true, SFE_UBLOX_GNSS_ID_BEIDOU)) {
       Serial.println("✅ BEIDOU enabled.");
+      enabledBeiDou = true;
     } else {
       Serial.println("❌ Failed to enable BEIDOU.");
+      enabledBeiDou = false;
     }
   #else
     myGNSS.enableGNSS(false, SFE_UBLOX_GNSS_ID_BEIDOU);
     Serial.println("🚫 BEIDOU disabled.");
+    enabledBeiDou = false;
   #endif
 
   // Optional: QZSS
@@ -285,33 +306,24 @@ void loop() {
       lastITOW = currentITOW;
       gnssUpdateCount++;
 
+      // Read accelerometer/gyro on every GNSS update so telemetry is available even when not BLE-connected
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+
+      // Convert accelerometer to milli-g
+      int16_t gX = kf_ax.updateEstimate(a.acceleration.x) * 1000.0 / 9.80665;
+      int16_t gY = kf_ay.updateEstimate(a.acceleration.y) * 1000.0 / 9.80665;
+      int16_t gZ = kf_az.updateEstimate(a.acceleration.z) * 1000.0 / 9.80665;
+
+      // Convert gyro to centi-deg/sec
+      int16_t rX = kf_gx.updateEstimate(g.gyro.x) * 180.0 / M_PI * 100.0;
+      int16_t rY = kf_gy.updateEstimate(g.gyro.y) * 180.0 / M_PI * 100.0;
+      int16_t rZ = kf_gz.updateEstimate(g.gyro.z) * 180.0 / M_PI * 100.0;
+
       if (deviceConnected && myGNSS.packetUBXNAVPVT != NULL) {
         const unsigned long now = millis();
         lastPacketSendTime = now;
         gpsUpdateCount++;
-
-        // Now that we're sending a packet, read the acceloromter
-        sensors_event_t a, g, temp;
-        mpu.getEvent(&a, &g, &temp);
-        // // Convert accelerometer to milli-g (1g = 9.80665 m/s^2)
-        // int16_t gX = a.acceleration.x * 1000.0 / 9.80665;
-        // int16_t gY = a.acceleration.y * 1000.0 / 9.80665;
-        // int16_t gZ = a.acceleration.z * 1000.0 / 9.80665;
-
-        // // Convert gyro to centi-deg/sec
-        // int16_t rX = g.gyro.x * 180.0 / M_PI * 100.0;
-        // int16_t rY = g.gyro.y * 180.0 / M_PI * 100.0;
-        // int16_t rZ = g.gyro.z * 180.0 / M_PI * 100.0;
-
-        // Convert accelerometer to milli-g
-        int16_t gX = kf_ax.updateEstimate(a.acceleration.x) * 1000.0 / 9.80665;
-        int16_t gY = kf_ay.updateEstimate(a.acceleration.y) * 1000.0 / 9.80665;
-        int16_t gZ = kf_az.updateEstimate(a.acceleration.z) * 1000.0 / 9.80665;
-
-        // Convert gyro to centi-deg/sec
-        int16_t rX = kf_gx.updateEstimate(g.gyro.x) * 180.0 / M_PI * 100.0;
-        int16_t rY = kf_gy.updateEstimate(g.gyro.y) * 180.0 / M_PI * 100.0;
-        int16_t rZ = kf_gz.updateEstimate(g.gyro.z) * 180.0 / M_PI * 100.0;
 
         uint8_t payload[80] = {0};
         uint8_t packet[88] = {0};
@@ -412,6 +424,35 @@ void loop() {
         pCharacteristicTx->setValue(packet, 88);
         pCharacteristicTx->notify();
         delay(20);
+      }
+
+      // Rate-limited serial telemetry (every SERIAL_PRINT_INTERVAL_MS)
+      const unsigned long nowSerial = millis();
+      if ((nowSerial - lastSerialPrintTime) >= SERIAL_PRINT_INTERVAL_MS) {
+        lastSerialPrintTime = nowSerial;
+
+        // GNSS info
+        int fixType = myGNSS.packetUBXNAVPVT ? myGNSS.packetUBXNAVPVT->data.fixType : 0;
+        int numSV = myGNSS.packetUBXNAVPVT ? myGNSS.packetUBXNAVPVT->data.numSV : 0;
+        double latitude = 0.0, longitude = 0.0;
+        if (myGNSS.packetUBXNAVPVT) {
+          latitude = myGNSS.packetUBXNAVPVT->data.lat / 10000000.0;
+          longitude = myGNSS.packetUBXNAVPVT->data.lon / 10000000.0;
+        }
+
+        Serial.printf("[Telemetry @%lu ms] Device: %s | BLE Connected: %s\n", nowSerial, deviceName.c_str(), deviceConnected ? "YES" : "NO");
+        Serial.printf("  GNSS: FixType=%d | SVs=%d | Lat=%.7f Lon=%.7f\n", fixType, numSV, latitude, longitude);
+
+        Serial.printf("  Constellations Enabled: GPS=%s, Galileo=%s, GLONASS=%s, BeiDou=%s\n",
+                      enabledGPS ? "Y" : "N",
+                      enabledGalileo ? "Y" : "N",
+                      enabledGLONASS ? "Y" : "N",
+                      enabledBeiDou ? "Y" : "N");
+
+        // Print accelerometer/gyro telemetry
+        Serial.printf("  Accel (milli-g): X=%d, Y=%d, Z=%d | Gyro (centi-deg/s): X=%d, Y=%d, Z=%d\n",
+                      gX, gY, gZ, rX, rY, rZ);
+
       }
     }
 
