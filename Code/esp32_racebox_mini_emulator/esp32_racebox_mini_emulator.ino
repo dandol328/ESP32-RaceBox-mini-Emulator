@@ -299,8 +299,58 @@ void setup() {
   pCharacteristicRx->setCallbacks(new MyCharacteristicCallbacks());
 
   pService->start();
+
+  // --- add Device Information service so the official RaceBox app accepts the device ---
+  BLEService *pDeviceInfoService = pServer->createService(BLEUUID((uint16_t)0x180A));
+
+  // Model Number (0x2A24)
+  BLECharacteristic *pModelChar = pDeviceInfoService->createCharacteristic(
+    BLEUUID((uint16_t)0x2A24),
+    BLECharacteristic::PROPERTY_READ
+  );
+
+  // Serial Number (0x2A25)
+  BLECharacteristic *pSerialChar = pDeviceInfoService->createCharacteristic(
+    BLEUUID((uint16_t)0x2A25),
+    BLECharacteristic::PROPERTY_READ
+  );
+
+  // Firmware Revision (0x2A26)
+  BLECharacteristic *pFwRevChar = pDeviceInfoService->createCharacteristic(
+    BLEUUID((uint16_t)0x2A26),
+    BLECharacteristic::PROPERTY_READ
+  );
+
+  // Hardware Revision (0x2A27) - optional
+  BLECharacteristic *pHwRevChar = pDeviceInfoService->createCharacteristic(
+    BLEUUID((uint16_t)0x2A27),
+    BLECharacteristic::PROPERTY_READ
+  );
+
+  // Manufacturer Name (0x2A29)
+  BLECharacteristic *pManufChar = pDeviceInfoService->createCharacteristic(
+    BLEUUID((uint16_t)0x2A29),
+    BLECharacteristic::PROPERTY_READ
+  );
+
+  // Populate values. deviceName is already defined earlier; keep the "RaceBox Mini " prefix + 10 digits.
+  String serialStr = "0000000000";
+  if (deviceName.length() >= 10) {
+    serialStr = deviceName.substring(deviceName.length() - 10); // last 10 chars should be serial
+  }
+
+  pModelChar->setValue("RaceBox Mini");
+  pSerialChar->setValue(serialStr.c_str());
+  pFwRevChar->setValue("1.0");     // set something sensible
+  pHwRevChar->setValue("1");       // optional
+  pManufChar->setValue("RaceBox"); // or the exact manufacturer string if known
+
+  pDeviceInfoService->start();
+
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(RACEBOX_SERVICE_UUID);
+  pAdvertising->addServiceUUID(BLEUUID((uint16_t)0x180A));
+  pAdvertising->setScanResponse(true);
   BLEDevice::startAdvertising();
   Serial.println("📡 BLE advertising started.");
 
